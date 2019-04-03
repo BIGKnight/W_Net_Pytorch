@@ -1,0 +1,3 @@
+In step 0, epoch 1,  MAE = 432.3440856933594, MSE = 557.9041137695312, time cost eval = 25.72523593902588s
+
+ In epoch 0, the mseloss = -1, the bceloss = 11.84746823310852,, time_cost = 17.301972150802612s

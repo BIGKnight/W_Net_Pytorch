@@ -1,16 +1,21 @@
 import torch
 import torch.nn as nn
+import sys
 
 class JointLoss(nn.Module):
     def __init__(self, alpha, beta):
         super(JointLoss, self).__init__()
-        self.MSELoss = nn.MSELoss(size_average=True)
-        self.BCELoss = nn.BCELoss(size_average=True)
+        self.MSELoss = nn.MSELoss(size_average=False)
+        self.BCELoss = nn.BCELoss(size_average=False)
         self.alpha = alpha
         self.beta = beta
     
     def forward(self, x, gt_map, target_map):
-        return self.MSELoss(x, gt_map) * alpha + self.BCELoss(x, target_map) * beta
+        mse = self.MSELoss(x, gt_map) * self.alpha
+        bce = self.BCELoss(x, target_map) * self.beta
+        sys.stdout.write("mse loss = {}, bce loss = {}\r".format(mse, bce))
+        sys.stdout.flush()
+        return  mse + bce
     
 class AEBatch(nn.Module):
     def __init__(self):

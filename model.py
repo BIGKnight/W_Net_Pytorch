@@ -2,15 +2,7 @@ import torch
 import torch.nn as nn
 import torchvision.models as model
 import torch.nn.functional as functional
-vgg16bn_frop_fc = list(model.vgg16_bn(pretrained=False).children())[0]
-
-class ConnectLayer(nn.Module):
-    def __init__(self):
-        super(ConnectLayer, self).__init__()
-        
-    def forward(self, decoded_input, encoded_input):
-        decoded_input = functional.interpolate(decoded_input, scale_factor=[2, 2, 1], mode="nearest")
-        return torch.cat([decoded_input, encoded_input], dim=1)
+# vgg16bn_frop_fc = list(model.vgg16_bn(pretrained=True).children())[0]
 
 class BasicConv2d(nn.Module):
     def __init__(self, 
@@ -35,18 +27,9 @@ class BasicConv2d(nn.Module):
         x = self.activation(x)
         return x
 
-        
-class W_Net(nn.Module):
+class Decoder(nn.Module):
     def __init__(self):
-        super(W_Net, self).__init__()
-        self.B1_C2 = nn.Sequential(*(list(vgg16bn_frop_fc.children())[0:6]))
-        self.B2_C2 = nn.Sequential(*(list(vgg16bn_frop_fc.children())[6:13]))
-        self.B3_C3 = nn.Sequential(*(list(vgg16bn_frop_fc.children())[13:23]))
-        self.B4_C3 = nn.Sequential(*(list(vgg16bn_frop_fc.children())[23:33]))
-        self.B5_C3 = nn.Sequential(*(list(vgg16bn_frop_fc.children())[33:43]))
-        
-        self.Connect_Module = ConnectLayer()
-        
+        super(Decoder, self).__init__()
         self.Decoder_Block_1 = nn.Sequential(
             BasicConv2d(1024, 256, 1, 1, 0),
             BasicConv2d(256, 256, 3, 1, 1)
@@ -62,7 +45,55 @@ class W_Net(nn.Module):
             BasicConv2d(64, 64, 3, 1, 1),
             BasicConv2d(64, 32, 3, 1, 1, if_Bn=False)
         )
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
         
+    def forward(self, B5_C3, B4_C3, B3_C3, B2_C2):
+        concat_1 = torch.cat(
+                [functional.interpolate(B5_C3, scale_factor=[2, 2, 1], mode="nearest"), B4_C3], dim=1)
+        concat_2 = torch.cat(
+                [functional.interpolate(self.Decoder_Block_1(concat_1), scale_factor=[2, 2, 1], mode="nearest"), B3_C3], 
+                dim=1
+            )
+        concat_3 = torch.cat(
+                [functional.interpolate(self.Decoder_Block_2(concat_2), scale_factor=[2, 2, 1], mode="nearest"), B2_C2], dim=1)
+        return self.Decoder_Block_3(concat_3)
+
+class Encoder(nn.Module):
+    def __init__(self, pretrain=True):
+        super(Encoder, self).__init__()
+        self.B1_C2 = nn.Sequential(*(list(list(model.vgg16_bn(pretrained=pretrain).children())[0].children())[0:6]))
+        self.B2_C2 = nn.Sequential(*(list(list(model.vgg16_bn(pretrained=pretrain).children())[0].children())[6:13]))
+        self.B3_C3 = nn.Sequential(*(list(list(model.vgg16_bn(pretrained=pretrain).children())[0].children())[13:23]))
+        self.B4_C3 = nn.Sequential(*(list(list(model.vgg16_bn(pretrained=pretrain).children())[0].children())[23:33]))
+        self.B5_C3 = nn.Sequential(*(list(list(model.vgg16_bn(pretrained=pretrain).children())[0].children())[33:43]))
+        if pretrain == False:
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    nn.init.normal_(m.weight, std=0.01)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
+                elif isinstance(m, nn.BatchNorm2d):
+                    nn.init.constant_(m.weight, 1)
+                    nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x):
+        B1_C2_output = self.B1_C2(x)
+        B2_C2_output = self.B2_C2(B1_C2_output)
+        B3_C3_output = self.B3_C3(B2_C2_output)
+        B4_C3_output = self.B4_C3(B3_C3_output)
+        B5_C3_output = self.B5_C3(B4_C3_output)
+        return B5_C3_output, B4_C3_output, B3_C3_output,  B2_C2_output
+
+class Reinforcement_Branch(nn.Module):
+    def __init__(self):
+        super(Reinforcement_Branch, self).__init__()
         self.Reinforcement_Branch_Block_1 = nn.Sequential(
             BasicConv2d(1024, 256, 1, 1, 0),
             BasicConv2d(256, 256, 3, 1, 1)
@@ -80,56 +111,49 @@ class W_Net(nn.Module):
             nn.Conv2d(32, 1, 1, 1, 0),
             nn.Sigmoid()
         )
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+                
+    def forward(self, B5_C3, B4_C3, B3_C3, B2_C2):
+        concat_1 = torch.cat(
+                [functional.interpolate(B5_C3, scale_factor=[2, 2, 1], mode="nearest"), B4_C3], dim=1)
+        concat_2 = torch.cat(
+                [functional.interpolate(self.Reinforcement_Branch_Block_1(concat_1), scale_factor=[2, 2, 1], mode="nearest"), B3_C3], 
+                dim=1
+            )
+        concat_3 = torch.cat(
+                [functional.interpolate(self.Reinforcement_Branch_Block_2(concat_2), scale_factor=[2, 2, 1], mode="nearest"), B2_C2], dim=1)
+        return self.Reinforcement_Branch_Block_3(concat_3)
         
+        
+class W_Net(nn.Module):
+    def __init__(self, pretrain=True):
+        super(W_Net, self).__init__()
+        self.encoder = Encoder(pretrain)
+        self.decoder = Decoder()
+        self.reinforcement = Reinforcement_Branch()
         self.output_layer = nn.Sequential(
             nn.Conv2d(32, 1, 1, 1, 0),
             nn.ReLU(inplace=True)
         )
-        
-        for block in [self.Decoder_Block_1, self.Decoder_Block_2, self.Decoder_Block_3, self.Reinforcement_Branch_Block_1, self.Reinforcement_Branch_Block_2, self.Reinforcement_Branch_Block_3, self.output_layer]:
-            for m in block.modules():
-                if isinstance(m, nn.Conv2d):
-                    nn.init.normal_(m.weight, std=0.01)
-                    if m.bias is not None:
-                        nn.init.constant_(m.bias, 0)
-                elif isinstance(m, nn.BatchNorm2d):
-                    nn.init.constant_(m.weight, 1)
+        for m in self.output_layer.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-        
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
         
     def forward(self, x):
-        B1_C2_output = self.B1_C2(x)
-        B2_C2_output = self.B2_C2(B1_C2_output)
-        B3_C3_output = self.B3_C3(B2_C2_output)
-        B4_C3_output = self.B4_C3(B3_C3_output)
-        B5_C3_output = self.B5_C3(B4_C3_output)
+        B5_C3, B4_C3, B3_C3, B2_C2 = self.encoder(x)
+        decoder_out = self.decoder(B5_C3, B4_C3, B3_C3, B2_C2)
+        reinforce_out = self.reinforcement(B5_C3, B4_C3, B3_C3, B2_C2)
+        return self.output_layer(torch.mul(decoder_out, reinforce_out))
         
-        concated_encoded_map_1 = self.Connect_Module(
-            decoded_input=B5_C3_output, 
-            encoded_input=B4_C3_output
-        )
-        Decoder_Block_1_output = self.Decoder_Block_1(concated_encoded_map_1)
-        Reinforcement_Branch_1_output = self.Reinforcement_Branch_Block_1(concated_encoded_map_1)
-        concated_decoded_map_2 = self.Connect_Module(
-            decoded_input=Decoder_Block_1_output,
-            encoded_input=B3_C3_output
-        )
-        concated_reinforcement_map_2 = self.Connect_Module(
-            decoded_input=Reinforcement_Branch_1_output,
-            encoded_input=B3_C3_output
-        )
-        Decoder_Block_2_output = self.Decoder_Block_2(concated_decoded_map_2)
-        Reinforcement_Branch_2_output=self.Reinforcement_Branch_Block_2(concated_reinforcement_map_2)
-        concated_decoded_map_3 = self.Connect_Module(
-            decoded_input=Decoder_Block_2_output,
-            encoded_input=B2_C2_output
-        )
-        concated_reinforcement_map_3 = self.Connect_Module(
-            decoded_input=Reinforcement_Branch_2_output,
-            encoded_input=B2_C2_output
-        )
-        Decoder_Block_3_output = self.Decoder_Block_3(concated_decoded_map_3)
-        Reinforcement_Branch_3_output=self.Reinforcement_Branch_Block_3(concated_reinforcement_map_3)
-        element_wise_mul = torch.mul(Decoder_Block_3_output, Reinforcement_Branch_3_output)
-        output = self.output_layer(element_wise_mul)
-        return output
