@@ -13,16 +13,16 @@ import torch
 # torch.backends.cudnn.benchmark=True
 # config
 config = {
-'SHANGHAITECH': 'A',
+'SHANGHAITECH': 'B',
 'min_RATE':10000000,
 'min_MAE':10240000,
 'min_MSE':10240000,
-'eval_num':182,
-'train_num':300,
-'learning_rate': 1e-4,
+'eval_num':316,
+'train_num':400,
+'learning_rate': 1e-6,
 'train_batch_size': 10,
 'epoch': 10000,
-'eval_per_step': 150,
+'eval_per_step': 200,
 'mode':'crop'
 }
 img_dir = "/home/zzn/Documents/Datasets/part_" + config['SHANGHAITECH'] + "_final/train_data/images"
@@ -31,8 +31,8 @@ binary_dir = "/home/zzn/Documents/Datasets/part_" + config['SHANGHAITECH'] + "_f
 img_dir_t = "/home/zzn/Documents/Datasets/part_" + config['SHANGHAITECH'] + "_final/test_data/images"
 gt_dir_t = "/home/zzn/Documents/Datasets/part_" + config['SHANGHAITECH'] + "_final/test_data/gt_map_w_net"
 binary_dir_t = "/home/zzn/Documents/Datasets/part_" + config['SHANGHAITECH'] + "_final/test_data/blur_map_w_net"
-model_save_path = "/home/zzn/PycharmProjects/W-Net_pytorch/checkpoints/model_w_net.pkl"
-f = open("/home/zzn/PycharmProjects/W-Net_pytorch/logs/log_differ_loss.txt", "w")
+model_save_path = "/home/zzn/PycharmProjects/W-Net_pytorch/checkpoints/model_w_net_B.pkl"
+f = open("/home/zzn/PycharmProjects/W-Net_pytorch/logs/log_w_net_B.txt", "w")
 # data_load
 train_dataset = TrainDatasetConstructor(img_dir, gt_dir, binary_dir, config['train_num'], mode=config['mode'], if_random_hsi=True, if_flip=True)
 eval_dataset = EvalDatasetConstructor(img_dir_t, gt_dir_t, config['eval_num'], mode=config['mode'])
@@ -45,13 +45,17 @@ cuda_device = torch.device("cuda")
 
 # model construct
 net = W_Net().cuda()
+encoder = list(net.children())[0]
+decoder = list(net.children())[1]
+attention = list(net.children())[2]
+output = list(net.children())[3]
 # net = torch.load("/home/zzn/PycharmProjects/W-Net_pytorch/checkpoints/model_w_net.pkl")
 # set optimizer and estimator
 
-optimizer_1 = torch.optim.Adam(net.parameters(), config['learning_rate'], weight_decay=5e-3)
-optimizer_2 = torch.optim.Adam(net.parameters(), config['learning_rate'], weight_decay=5e-3)
+optimizer_1 = torch.optim.Adam([{'params': encoder.parameters()}, {'params': decoder.parameters()}, {'params': output.parameters()}], config['learning_rate'], weight_decay=5e-3)
+optimizer_2 = torch.optim.Adam(attention.parameters(), config['learning_rate'], weight_decay=5e-3)
 # criterion = JointLoss(alpha=100000, beta=6).cuda()
-criterion_mseloss = torch.nn.MSELoss(size_average=False).cuda()
+criterion_mseloss = torch.nn.MSELoss(size_average=True).cuda()
 criterion_bceloss = torch.nn.BCELoss(size_average=True).cuda()
 ae_batch = AEBatch().cuda()
 se_batch = SEBatch().cuda()
@@ -64,9 +68,6 @@ for epoch_index in range(config['epoch']):
     mse_loss_list = []
     bce_loss_list = []
     time_per_epoch = 0
-    
-    if epoch_index == 50:
-        config['eval_per_step'] = 30
     
     for train_img_index, train_img, train_gt, train_binary in train_loader:
         if step % config['eval_per_step'] == 0:
@@ -86,44 +87,28 @@ for epoch_index in range(config['epoch']):
         torch.cuda.empty_cache()
         
 #         loss = criterion(prediction, y, z)
-        if epoch_index % 5 == 0:
-            optimizer_2.zero_grad()
-            # B
-            x = train_img
-            y = train_gt
-            z = train_binary
-            start = time.time()
-            prediction = net(x)
-            loss = criterion_bceloss(prediction, z) * 5
-            bce_loss_list.append(loss.data.item())
-            loss.backward()
-            optimizer_2.step()
-        
-        else:
-            optimizer_1.zero_grad()
+        optimizer_1.zero_grad()
+        optimizer_2.zero_grad()
                 # B
-            x = train_img
-            y = train_gt
-            z = train_binary
-            start = time.time()
-            prediction = net(x)
-            loss = criterion_mseloss(prediction, y)
-            mse_loss_list.append(loss.data.item())
-            loss.backward()
-            optimizer_1.step()
+        x = train_img
+        y = train_gt
+        z = train_binary
+        start = time.time()
+        
+        B5_C3, B4_C3, B3_C3, B2_C2 = encoder(x)
+        decoder_map = decoder(B5_C3, B4_C3, B3_C3, B2_C2)
+        attention_map = attention(B5_C3, B4_C3, B3_C3, B2_C2)
+        prediction = output(torch.mul(decoder_map, attention_map))
+        
+        bce_loss = criterion_bceloss(attention_map, z) * 20
+        mse_loss = criterion_mseloss(prediction, y) * 1000
+        mse_loss_list.append(mse_loss.data.item())
+        bce_loss_list.append(bce_loss.data.item())
+        bce_loss.backward(retain_graph=True)
+        mse_loss.backward() # calculate gradient
+        optimizer_1.step() # update encoder-decorder architecture's parameters
+        optimizer_2.step() # update reinforcement architecture's parameters
         step += 1
         torch.cuda.synchronize()
         end2 = time.time()
-#         if step == 400 * 100 or step == 400 * 1000 or step == 400 * 500:
-#             config['eval_per_step'] = eval_steps_adaptive(step)
         time_per_epoch += end2 - start
-    if len(mse_loss_list) > 0:
-        epoch_mse_loss = np.mean(mse_loss_list)
-    else:
-        epoch_mse_loss = -1
-    if len(bce_loss_list) > 0:
-        epoch_bce_loss = np.mean(bce_loss_list)
-    else:
-        epoch_bce_loss = -1
-    f.write('\n In epoch {}, the mseloss = {}, the bceloss = {},, time_cost = {}s\n'.format(epoch_index, epoch_mse_loss, epoch_bce_loss, time_per_epoch))
-    f.flush()
