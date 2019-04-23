@@ -34,7 +34,7 @@ def get_density_map_gaussian(H, W, ratio_h, ratio_w,  points, adaptive_kernel=Fa
         sigma = fixed_value
         sigma = max(1, sigma)
 
-        gaussian_radius = 14
+        gaussian_radius = 7
         gaussian_map = np.multiply(
             cv2.getGaussianKernel(gaussian_radius*2+1, sigma),
             cv2.getGaussianKernel(gaussian_radius*2+1, sigma).T
@@ -62,7 +62,7 @@ def get_density_map_gaussian(H, W, ratio_h, ratio_w,  points, adaptive_kernel=Fa
 if __name__ == "__main__":
     image_dir_path = "/home/zzn/Documents/Datasets/part_A_final/test_data/images"
     ground_truth_dir_path = "/home/zzn/Documents/Datasets/part_A_final/test_data/ground_truth"
-    output_gt_dir = "/home/zzn/Documents/Datasets/part_A_final/test_data/blur_map_w_net"
+    output_gt_dir = "/home/zzn/Documents/Datasets/part_A_final/test_data/gt_map_w_net"
     for i in range(182):
         img_path = image_dir_path + "/IMG_" + str(i + 1) + ".jpg"
         gt_path = ground_truth_dir_path + "/GT_IMG_" + str(i + 1) + ".mat"
@@ -70,19 +70,27 @@ if __name__ == "__main__":
         height = img.size[1]
         width = img.size[0]
         points = scio.loadmat(gt_path)['image_info'][0][0][0][0][0]
-        if height <= 400:
-            resize_height = 512
-        else:
-            resize_height = math.ceil(height / 128) * 128
         
-        if width <= 400:
-            resize_width = 512
-        else:
-            resize_width = math.ceil(width / 128) * 128
+        resize_height = height
+        resize_width = width
+        
+        if resize_height <= 416:
+            tmp = resize_height
+            resize_height = 416
+            resize_width = (resize_height / tmp) * resize_width
+            
+        if resize_width <= 416:
+            tmp = resize_width
+            resize_width = 416
+            resize_height = (resize_width / tmp) * resize_height
+            
+        resize_height = math.ceil(resize_height / 32) * 32
+        resize_width = math.ceil(resize_width / 32) * 32
+        
         ratio_h = (resize_height) / (height)
         ratio_w = (resize_width) / (width)
         # print(height, width, ratio_h, ratio_w)
-        gt = get_density_map_gaussian(resize_height, resize_width, ratio_h, ratio_w, points, False, 8)
+        gt = get_density_map_gaussian(resize_height, resize_width, ratio_h, ratio_w, points, False, 4)
         gt = np.reshape(gt, [resize_height, resize_width])  # transpose into w, h
         np.save(output_gt_dir + "/GT_IMG_" + str(i + 1), gt)
         print("complete!")
